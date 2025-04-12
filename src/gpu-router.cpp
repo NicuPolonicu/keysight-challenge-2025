@@ -278,6 +278,7 @@ tbb::flow::function_node<std::vector<Packet>, std::vector<Packet>> send_node {
         // In mod normal ar trebui sa folosim doar un sendto
         // insa nu merge, deci am facut un pcap macar sa se vada ca 
         // trimitem ceva!
+        // Fisierul se scrie in build/src/sent_packets.pcap
         pcap_t *pcap_handle = nullptr;
         const char *pcap_filename = "sent_packets.pcap";
         char errbuf[PCAP_ERRBUF_SIZE];
