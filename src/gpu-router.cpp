@@ -65,7 +65,7 @@ int main() {
         [&](tbb::flow_control& fc) -> std::vector<Packet> {
             static pcap_t* handle = nullptr;
             static char errbuf[PCAP_ERRBUF_SIZE];
-            static const char* pcap_file = "../../src/capture2.pcap";
+            static const char* pcap_file = "../../src/capture1.pcap";
 
             if (!handle) {
                 if (opened) {
@@ -250,46 +250,83 @@ int main() {
     };
     
 
-    
-    
+tbb::flow::function_node<std::vector<Packet>, std::vector<Packet>> send_node {
+    g, tbb::flow::unlimited, [&](std::vector<Packet> packets) {
+        int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+        if (sock < 0) {
+            perror("Socket creation failed");
+            return packets;
+        }
 
-    tbb::flow::function_node<std::vector<Packet>, std::vector<Packet>> send_node {
-        g, tbb::flow::unlimited, [&](std::vector<Packet> packets) {
-            int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-            if (sock < 0) {
-                perror("Socket creation failed");
-                return packets;
-            }
-
-            int one = 1;
-            if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0) {
-                perror("setsockopt failed");
-                close(sock);
-                return packets;
-            }
-
-            for (const auto& p : packets) {
-                if (!p.valid || p.data.size() < 34) continue;
-                packets_sent++;
-                struct sockaddr_in dest{};
-                dest.sin_family = AF_INET;
-                dest.sin_port = 0;
-                std::memcpy(&dest.sin_addr, &p.data[30], 4);
-
-                // std :: cout << "Sending packet to: "
-                //             << (int)p.data[30] << "." << (int)p.data[31] << "."
-                //             << (int)p.data[32] << "." << (int)p.data[33]
-                //             << " size: " << p.data.size() << std::endl;
-
-                ssize_t sent = sendto(sock, p.data.data(), p.data.size(), 0,
-                                      (struct sockaddr*)&dest, sizeof(dest));
-                if (sent < 0) perror("sendto failed");
-            }
-
+        int one = 1;
+        if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0) {
+            perror("setsockopt failed");
             close(sock);
             return packets;
         }
-    };
+
+        const char *interface = "lo";
+        if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, interface, strlen(interface)) < 0) {
+            perror("setsockopt SO_BINDTODEVICE failed");
+            std::cout << "Error: Unable to bind to interface " << interface << std::endl;
+            close(sock);
+            return packets;
+        }
+
+
+        // Am deschis un PCAP deoarece nu merg interfetele pe docker/local.
+        // In mod normal ar trebui sa folosim doar un sendto
+        // insa nu merge, deci am facut un pcap macar sa se vada ca 
+        // trimitem ceva!
+        pcap_t *pcap_handle = nullptr;
+        const char *pcap_filename = "sent_packets.pcap";
+        char errbuf[PCAP_ERRBUF_SIZE];
+        pcap_handle = pcap_open_dead(DLT_EN10MB, 65535);
+        if (!pcap_handle) {
+            std::cerr << "Error opening pcap dump handle: " << errbuf << std::endl;
+            close(sock);
+            return packets;
+        }
+
+        pcap_dumper_t *pcap_dumper = pcap_dump_open(pcap_handle, pcap_filename);
+        if (!pcap_dumper) {
+            std::cerr << "Error opening pcap dump file: " << pcap_filename << std::endl;
+            pcap_close(pcap_handle);
+            close(sock);
+            return packets;
+        }
+
+        for (const auto& p : packets) {
+            if (!p.valid || p.data.size() < 34) continue;
+            packets_sent++;
+            struct sockaddr_in dest{};
+            dest.sin_family = AF_INET;
+            dest.sin_port = 0;
+            std::memcpy(&dest.sin_addr.s_addr, &p.data[30], 4);
+
+            std::cout << "Sending packet to: "
+                      << (int)p.data[30] << "." << (int)p.data[31] << "."
+                      << (int)p.data[32] << "." << (int)p.data[33]
+                      << " size: " << p.data.size() << std::endl;
+
+            ssize_t sent = sendto(sock, p.data.data(), p.data.size(), 0,
+                                  (struct sockaddr*)&dest, sizeof(dest));
+            if (sent < 0) perror("sendto failed");
+
+            struct pcap_pkthdr header{};
+            header.len = p.data.size();
+            header.caplen = p.data.size();
+            pcap_dump((u_char*)pcap_dumper, &header, p.data.data());
+        }
+
+        pcap_dump_close(pcap_dumper);
+        pcap_close(pcap_handle);
+
+        close(sock);
+        return packets;
+    }
+};
+
 
     // Construct graph
     tbb::flow::make_edge(in_node, parse_packet_node);
