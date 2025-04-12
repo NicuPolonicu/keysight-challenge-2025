@@ -25,7 +25,6 @@ const size_t burst_size = 32;
 struct Packet {
     std::vector<u_char> data;
     bool valid = false;
-    std::array<u_char, 4> dest_ip{};
 };
 
 struct CountingStats {
@@ -132,7 +131,6 @@ int main() {
             }
     
             std::vector<uint8_t> valid_flags(N, 0);
-            std::vector<std::array<u_char, 4>> dest_ips(N);
             struct CountingStats local_stats = {0, 0, 0, 0, 0};
             
     
@@ -140,14 +138,12 @@ int main() {
                 sycl::buffer<u_char> buf(flat_data.data(), sycl::range<1>(flat_data.size()));
                 sycl::buffer<size_t> offsets_buf(packet_offsets.data(), sycl::range<1>(N));
                 sycl::buffer<uint8_t> valid_buf(valid_flags.data(), sycl::range<1>(N));
-                sycl::buffer<std::array<u_char, 4>> ip_buf(dest_ips.data(), sycl::range<1>(N));
                 sycl::buffer<CountingStats> stats_buf(&local_stats, sycl::range<1>(1));
     
                 q.submit([&](sycl::handler& h) {
                     auto data = buf.get_access<sycl::access::mode::read>(h);
                     auto offsets = offsets_buf.get_access<sycl::access::mode::read>(h);
                     auto valid = valid_buf.get_access<sycl::access::mode::write>(h);
-                    auto ips = ip_buf.get_access<sycl::access::mode::write>(h);
                     auto stats = stats_buf.get_access<sycl::access::mode::write>(h);
     
                     h.parallel_for(sycl::range<1>(N), [=](sycl::id<1> i) {
@@ -179,9 +175,6 @@ int main() {
                             valid[i] |= ARP_FLAG;
                         }
 
-                        if (valid[i] & IPV4_FLAG)
-                            for (int j = 0; j < 4; ++j)
-                                ips[i][j] = data[offset + 30 + j];
                     });
                 }).wait_and_throw();
             }
@@ -190,7 +183,6 @@ int main() {
                 if (valid_flags[i] & IPV4_FLAG) {
                     burst[i].valid = true;
                 }
-                burst[i].dest_ip = dest_ips[i];
                 if (valid_flags[i] & IPV4_FLAG) local_stats.ipv4++;
                 if (valid_flags[i] & IPV6_FLAG) local_stats.ipv6++;
                 if (valid_flags[i] & ICMP_FLAG) local_stats.icmp++;
@@ -198,7 +190,7 @@ int main() {
                 if (valid_flags[i] & TCP_FLAG) local_stats.tcp++;
                 if (valid_flags[i] & ARP_FLAG) local_stats.arp++;
             }
-            
+
             final_stats.ipv4 += local_stats.ipv4;
             final_stats.ipv6 += local_stats.ipv6;
             final_stats.icmp += local_stats.icmp;
@@ -251,9 +243,6 @@ int main() {
                 packets[i].data.assign(flat_data.begin() + packet_offsets[i],
                                        flat_data.begin() + packet_offsets[i] + packets[i].data.size());
     
-                for (int j = 0; j < 4; ++j) {
-                    packets[i].dest_ip[j] = packets[i].data[30 + j];
-                }
             }
     
             return packets;
@@ -285,12 +274,12 @@ int main() {
                 struct sockaddr_in dest{};
                 dest.sin_family = AF_INET;
                 dest.sin_port = 0;
-                std::memcpy(&dest.sin_addr, p.dest_ip.data(), 4);
+                std::memcpy(&dest.sin_addr, &p.data[30], 4);
 
-                // std::cout << "Sending to: "
-                //           << (int)p.dest_ip[0] << "." << (int)p.dest_ip[1] << "."
-                //           << (int)p.dest_ip[2] << "." << (int)p.dest_ip[3]
-                //           << " size: " << p.data.size() << std::endl;
+                // std :: cout << "Sending packet to: "
+                //             << (int)p.data[30] << "." << (int)p.data[31] << "."
+                //             << (int)p.data[32] << "." << (int)p.data[33]
+                //             << " size: " << p.data.size() << std::endl;
 
                 ssize_t sent = sendto(sock, p.data.data(), p.data.size(), 0,
                                       (struct sockaddr*)&dest, sizeof(dest));
