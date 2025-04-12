@@ -20,7 +20,7 @@
 #include <pcap.h>
 
 const size_t burst_size = 32;
-#define PACKET_SIZE 1500
+#define PACKET_SIZE 1518
 
 struct Packet {
     std::vector<u_char> data;
